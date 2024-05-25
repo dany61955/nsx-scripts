@@ -1,0 +1,89 @@
+---
+- name: Fetch NSX Firewall Rules
+  hosts: localhost
+  gather_facts: no
+  vars:
+    nsx_ip: "nsxip"
+    username: "your_username"
+    password: "your_password"
+    tier0_endpoint: "https://{{ nsx_ip }}/policy/api/v1/infra/tier-0s"
+    tier1_endpoint: "https://{{ nsx_ip }}/policy/api/v1/infra/tier-1s"
+    output_file: "gfw_rules.json"
+
+  tasks:
+    - name: Fetch Tier 0 gateways
+      uri:
+        url: "{{ tier0_endpoint }}"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        return_content: yes
+      register: tier0_response
+
+    - name: Fetch Tier 1 gateways
+      uri:
+        url: "{{ tier1_endpoint }}"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        return_content: yes
+      register: tier1_response
+
+    - name: Extract Tier 0 gateway IDs
+      set_fact:
+        tier0_ids: "{{ tier0_response.json.results | map(attribute='id') | list }}"
+
+    - name: Extract Tier 1 gateway IDs
+      set_fact:
+        tier1_ids: "{{ tier1_response.json.results | map(attribute='id') | list }}"
+
+    - name: Initialize results dictionary
+      set_fact:
+        all_gfw_rules: {"tier0": {}, "tier1": {}}
+
+    - name: Fetch Tier 0 gateway firewall rules
+      uri:
+        url: "https://{{ nsx_ip }}/policy/api/v1/infra/tier-0s/{{ item }}/gateway-firewall"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        return_content: yes
+      loop: "{{ tier0_ids }}"
+      register: tier0_gfw_rules
+      failed_when: tier0_gfw_rules is failed
+
+    - name: Populate Tier 0 GFW rules
+      set_fact:
+        all_gfw_rules: "{{ all_gfw_rules | combine({'tier0': all_gfw_rules['tier0'] | combine({item.item: item.json})}) }}"
+      loop: "{{ tier0_gfw_rules.results }}"
+      when: item.json is defined
+
+    - name: Fetch Tier 1 gateway firewall rules
+      uri:
+        url: "https://{{ nsx_ip }}/policy/api/v1/infra/tier-1s/{{ item }}/gateway-firewall"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        return_content: yes
+      loop: "{{ tier1_ids }}"
+      register: tier1_gfw_rules
+      failed_when: tier1_gfw_rules is failed
+
+    - name: Populate Tier 1 GFW rules
+      set_fact:
+        all_gfw_rules: "{{ all_gfw_rules | combine({'tier1': all_gfw_rules['tier1'] | combine({item.item: item.json})}) }}"
+      loop: "{{ tier1_gfw_rules.results }}"
+      when: item.json is defined
+
+    - name: Save firewall rules to file
+      copy:
+        content: "{{ all_gfw_rules | to_nice_json }}"
+        dest: "{{ output_file }}"
